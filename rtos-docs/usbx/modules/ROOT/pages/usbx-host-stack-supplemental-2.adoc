@@ -2,14 +2,14 @@
 
  Copyright (c) Microsoft
  Copyright (c) 2024-present Eclipse ThreadX contributors
- 
- This program and the accompanying materials are made available 
+
+ This program and the accompanying materials are made available
  under the terms of the MIT license which is available at
  https://opensource.org/license/mit.
- 
+
  SPDX-License-Identifier: MIT
- 
- Contributors: 
+
+ Contributors:
      * Frédéric Desbiens - Initial AsciiDoc version.
 
 ////
@@ -25,6 +25,7 @@ This chapter covers all the exposed APIs of the USBX host classes. The following
 * Pima/PTP class
 * Prolific class
 * Generic Serial class
+* xref:usbx-host-stack-supplemental-2.adoc#_usb_video_class_overview[Video class]
 
 == ux_host_class_printer_read
 
@@ -1796,4 +1797,888 @@ This function stops the reception on the generic serial class interface.
 ----
 /* Stops the reception for gser. */
 ux_host_class_gser_reception_stop(gser, &gser_reception);
+----
+
+== USB Video class overview
+
+The USBX host Video class supports USB Video Class (UVC) devices such as cameras. It handles the VideoControl interface (camera and processing unit controls) and one VideoStreaming interface. Video data is received on an isochronous IN endpoint. The class does not decode or display video. It delivers the raw payloads sent by the device (for example MJPEG, uncompressed, frame-based, H.264 or VP8 frames) to the application.
+
+=== Configuration options
+
+* `UX_ENABLE_ERROR_CHECKING`: when defined, the `ux_host_class_video_*` API macros map to checking versions (`_uxe_host_class_video_*`) that return `UX_INVALID_PARAMETER` for `NULL` pointers before calling the actual function.
+
+* `UX_HOST_CLASS_VIDEO_TRANSFER_REQUEST_COUNT` (default 8): the size of the ring of transfer requests used by `ux_host_class_video_transfer_buffer_add` and `ux_host_class_video_transfer_buffers_add`. At most `UX_HOST_CLASS_VIDEO_TRANSFER_REQUEST_COUNT - 1` buffers can be queued at a time. Define it in `ux_user.h` to override the default.
+
+=== Streaming sequence
+
+A typical application follows these steps:
+
+. Optionally discover the formats, frames and frame intervals with `ux_host_class_video_ioctl`
+- `UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_NUMBER`
+- `UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_DATA`
+- `UX_HOST_CLASS_VIDEO_IOCTL_GET_FRAME_DATA`
+- `UX_HOST_CLASS_VIDEO_IOCTL_GET_FRAME_INTERVAL`
+. Select the format, resolution and frame interval with `ux_host_class_video_frame_parameters_set`. The device is probed, and the maximum payload size it needs is checked.
+. Register a completion callback with `ux_host_class_video_transfer_callback_set`.
+. Start streaming with `ux_host_class_video_start`. This commits the parameters and selects the streaming alternate setting that has enough isochronous bandwidth.
+. Get the buffer size with `ux_host_class_video_max_payload_get`, and queue buffers with `ux_host_class_video_transfer_buffers_add`.
+. In the completion callback, process the received payload and queue the buffer again with `ux_host_class_video_transfer_buffer_add`.
+. Stop streaming with `ux_host_class_video_stop`. This aborts pending transfers and returns the streaming interface to alternate setting 0.
+
+=== Video class parameter structures
+
+*UX_HOST_CLASS_VIDEO_PARAMETER_INPUT_TERMINAL*
+
+* *ux_host_class_video_parameter_input_terminal_id*: ID of the input terminal.
+* *ux_host_class_video_parameter_input_terminal_type*: Type of the input terminal, for example `UX_HOST_CLASS_VIDEO_ITT_CAMERA`.
+
+*UX_HOST_CLASS_VIDEO_PARAMETER_NUMBER_FORMATS*
+
+* *ux_host_class_video_parameter_number_formats*: Number of formats reported by the VideoStreaming input header.
+
+*UX_HOST_CLASS_VIDEO_PARAMETER_FORMAT_DATA*
+
+* *ux_host_class_video_parameter_format_requested*: (in) Format index, starting at 1.
+* *ux_host_class_video_parameter_format_subtype*: (out) Format descriptor subtype, for example `UX_HOST_CLASS_VIDEO_VS_FORMAT_MJPEG`.
+* *ux_host_class_video_parameter_format_guid*: (out) Pointer to the format GUID in the descriptor, or `UX_NULL` if the subtype has no GUID.
+* *ux_host_class_video_parameter_number_frame_descriptors*: (out) Number of frame descriptors of the format. It is 0 for formats without frame descriptors (stream-based, DV and MPEG-2 TS).
+
+*UX_HOST_CLASS_VIDEO_PARAMETER_FRAME_DATA*
+
+* *ux_host_class_video_parameter_frame_requested*: (in) Frame index, starting at 1.
+* *ux_host_class_video_parameter_frame_width*: (out) Frame width in pixels.
+* *ux_host_class_video_parameter_frame_height*: (out) Frame height in pixels.
+* *ux_host_class_video_parameter_default_frame_interval*: (out) Default frame interval, in 100 ns units.
+* *ux_host_class_video_parameter_frame_interval_type*: (out) 0 if the intervals are continuous (minimum, maximum and step), otherwise the number of discrete intervals.
+* *ux_host_class_video_parameter_frame_intervals*: (out) Pointer to the intervals in the descriptor (little-endian 32-bit values).
+
+*UX_HOST_CLASS_VIDEO_PARAMETER_FRAME_INTERVAL*
+
+* *ux_host_class_video_parameter_frame_requested*: (in) Frame index, starting at 1.
+* *ux_host_class_video_parameter_frame_interval_buffer*: (in) Application buffer of `ULONG` that receives the intervals.
+* *ux_host_class_video_parameter_frame_interval_buffer_length*: (in) Size of the buffer, in bytes.
+* *ux_host_class_video_parameter_frame_interval_buffer_length_written*: (out) Number of bytes written. If the frame has continuous intervals, three values are written (minimum, maximum and step).
+
+*UX_HOST_CLASS_VIDEO_PARAMETER_CHANNEL*
+
+* *ux_host_class_video_parameter_format_requested*: Format index, starting at 1.
+* *ux_host_class_video_parameter_frame_requested*: Frame index, starting at 1.
+* *ux_host_class_video_parameter_frame_interval_requested*: Frame interval, in 100 ns units.
+* *ux_host_class_video_parameter_channel_bandwidth_selection*: Maximum payload size to use for the alternate setting selection. 0 uses the value returned by the device during the probe.
+
+*UX_HOST_CLASS_VIDEO_CONTROL*
+
+* *ux_host_class_video_control*: Control selector of the processing unit, for example `UX_HOST_CLASS_VIDEO_PU_BRIGHTNESS_CONTROL`.
+* *ux_host_class_video_control_min*, *ux_host_class_video_control_max*, *ux_host_class_video_control_res*: Minimum, maximum and resolution values (filled by `ux_host_class_video_control_get`).
+* *ux_host_class_video_control_cur*: Current value (read by `ux_host_class_video_control_value_get`, written by `ux_host_class_video_control_value_set`).
+
+*UX_HOST_CLASS_VIDEO_TRANSFER_REQUEST*
+
+* *ux_host_class_video_transfer_request_data_pointer*: Pointer to the data buffer.
+* *ux_host_class_video_transfer_request_requested_length*: Length of the data to receive.
+* *ux_host_class_video_transfer_request_actual_length*: Length actually received (set on completion).
+* *ux_host_class_video_transfer_request_completion_code*: Completion code of the transfer (set on completion).
+* *ux_host_class_video_transfer_request_completion_function*: Function called when the transfer completes.
+* *ux_host_class_video_transfer_request_next_video_transfer_request*: Next request when requests are submitted as a list, otherwise `UX_NULL`.
+
+=== Video class error codes
+
+In addition to the standard USBX codes, the Video class returns:
+
+* *UX_HOST_CLASS_VIDEO_WRONG_TYPE*: (0x90) A required descriptor, format, frame or alternate setting was not found.
+* *UX_HOST_CLASS_VIDEO_WRONG_INTERFACE*: (0x91) The streaming interface has no active isochronous endpoint. Call `ux_host_class_video_start` first.
+* *UX_HOST_CLASS_VIDEO_PARAMETER_ERROR*: (0x92) The requested format, frame size, frame interval or payload size is not supported by the device.
+* *UX_HOST_CLASS_VIDEO_DEVICE_NOT_READY*: (0x93) The device is not in the configured state.
+
+=== Video class registration
+
+Register the Video class after initializing the host stack and before registering the host controller driver (HCD):
+
+[,C]
+----
+status = ux_host_stack_class_register(_ux_system_host_class_video_name, ux_host_class_video_entry);
+----
+
+The class claims a device when one of its interfaces has class code `UX_HOST_CLASS_VIDEO_CLASS` (0x0E). A class instance is created for the VideoStreaming interface only. The matching VideoControl interface is located through the VideoControl header descriptor. The instance is `UX_HOST_CLASS_VIDEO` and is ready to use once its `ux_host_class_video_state` is `UX_HOST_CLASS_INSTANCE_LIVE`.
+
+During activation, the class parses the configuration descriptor and stores:
+
+* The ID of the first processing unit (`ux_host_class_video_feature_unit_id`), used by the control functions.
+* The ID and type of the first input terminal (`ux_host_class_video_terminal_id`, `ux_host_class_video_terminal_type`).
+* The number of formats and the location of the format and frame descriptors.
+
+If the VideoControl header, a processing unit, an input terminal or the VideoStreaming input header is missing, the activation fails with `UX_HOST_CLASS_VIDEO_WRONG_TYPE`.
+
+=== Getting the class instance
+
+The instance can be obtained from the registered class, or from the host change callback passed to `ux_host_stack_initialize` (`UX_DEVICE_INSERTION` and `UX_DEVICE_REMOVAL` events). See xref:usbx-host-stack-2.adoc#_access_to_host_class_function_instance[Access to Host Class Function Instance].
+
+[,C]
+----
+UX_HOST_CLASS       *video_class;
+UX_HOST_CLASS_VIDEO *video;
+
+status = ux_host_stack_class_get(_ux_system_host_class_video_name, &video_class);
+if (status != UX_SUCCESS)
+    return(status);
+
+status = ux_host_stack_class_instance_get(video_class, 0, (VOID **) &video);
+if ((status != UX_SUCCESS) || (video -> ux_host_class_video_state != UX_HOST_CLASS_INSTANCE_LIVE))
+    return(UX_ERROR);
+----
+
+== ux_host_class_video_ioctl
+
+Perform an IOCTL function on the video interface.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_ioctl(
+    UX_HOST_CLASS_VIDEO *video,
+    ULONG ioctl_function,
+    VOID *parameter)
+----
+
+=== Description
+
+This function performs a specific ioctl function on the video class instance. The call is blocking and only returns when the function is completed.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *ioctl_function*: ioctl function to be performed. See the table below.
+* *parameter*: Pointer to a parameter structure specific to the ioctl function.
+
+=== IOCTL functions
+
+[cols="2,2,3"]
+|===
+| ioctl_function | parameter | Description
+
+| UX_HOST_CLASS_VIDEO_IOCTL_GET_INPUT_TERMINAL
+| UX_HOST_CLASS_VIDEO_PARAMETER_INPUT_TERMINAL
+| Get the ID and type of the input terminal. Returns `UX_ERROR` if the terminal is not defined.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_NUMBER
+| UX_HOST_CLASS_VIDEO_PARAMETER_NUMBER_FORMATS
+| Get the number of formats.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_DATA
+| UX_HOST_CLASS_VIDEO_PARAMETER_FORMAT_DATA
+| Get the subtype, GUID and number of frames for a format. The format becomes the current format for the frame ioctl functions.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_GET_FRAME_NUMBER
+| (not used)
+| Not implemented, returns `UX_FUNCTION_NOT_SUPPORTED`. Use the number of frame descriptors returned by `UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_DATA`.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_GET_FRAME_DATA
+| UX_HOST_CLASS_VIDEO_PARAMETER_FRAME_DATA
+| Get the size and interval information of a frame of the current format.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_GET_FRAME_INTERVAL
+| UX_HOST_CLASS_VIDEO_PARAMETER_FRAME_INTERVAL
+| Copy the frame intervals of a frame of the current format into an application buffer.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_CHANNEL_START
+| UX_HOST_CLASS_VIDEO_PARAMETER_CHANNEL
+| Probe, commit and start streaming with the given parameters.
+
+| UX_HOST_CLASS_VIDEO_IOCTL_CHANNEL_STOP
+| (not used)
+| Stop streaming (same as `ux_host_class_video_stop`).
+
+| UX_HOST_CLASS_VIDEO_IOCTL_ABORT_IN_PIPE
+| (not used)
+| Abort all pending transfers on the isochronous endpoint.
+|===
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The function was completed.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) The instance is not live or mounting.
+* *UX_FUNCTION_NOT_SUPPORTED*: (0x54) Unknown IOCTL function.
+* *UX_ERROR*: (0xff) The input terminal is not defined.
+* *UX_DESCRIPTOR_CORRUPTED*: (0x42) The format or frame descriptors are corrupted.
+* *UX_HOST_CLASS_VIDEO_WRONG_TYPE*: (0x90) The requested format or frame was not found.
+
+=== Example
+
+[,C]
+----
+UX_HOST_CLASS_VIDEO_PARAMETER_NUMBER_FORMATS    number_formats;
+UX_HOST_CLASS_VIDEO_PARAMETER_FORMAT_DATA       format_data;
+UX_HOST_CLASS_VIDEO_PARAMETER_FRAME_DATA        frame_data;
+ULONG                                           format_index;
+ULONG                                           frame_index;
+
+/* Enumerate all formats and frames supported by the camera. */
+status = ux_host_class_video_ioctl(video, UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_NUMBER, &number_formats);
+
+for (format_index = 1; format_index <= number_formats.ux_host_class_video_parameter_number_formats;      format_index++)
+{
+    format_data.ux_host_class_video_parameter_format_requested = format_index;
+    status = ux_host_class_video_ioctl(video, UX_HOST_CLASS_VIDEO_IOCTL_GET_FORMAT_DATA, &format_data);
+    if (status != UX_SUCCESS)
+        break;
+
+    for (frame_index = 1; frame_index <= format_data.ux_host_class_video_parameter_number_frame_descriptors;
+        frame_index++)
+    {
+        frame_data.ux_host_class_video_parameter_frame_requested = frame_index;
+        status = ux_host_class_video_ioctl(video, UX_HOST_CLASS_VIDEO_IOCTL_GET_FRAME_DATA, &frame_data);
+        if (status != UX_SUCCESS)
+            break;
+
+        /* frame_data holds the width, height and intervals of this frame. */
+    }
+}
+----
+
+== ux_host_class_video_frame_parameters_set
+
+Select the video format, frame size and frame interval.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_frame_parameters_set(
+    UX_HOST_CLASS_VIDEO *video,
+    ULONG frame_format,
+    ULONG width,
+    ULONG height,
+     ULONG frame_interval)
+----
+
+=== Description
+
+This function searches the format, frame size and frame interval in the device descriptors, then probes the device with a VideoStreaming probe control request (SET_CUR followed by GET_CUR). If the device accepts the parameters, the current format, frame and frame interval of the instance are saved together with the maximum payload size reported by the device. The parameters are applied to the stream by `ux_host_class_video_start`.
+
+The maximum payload size must be in the range 1 to 1023 bytes for a full-speed device, and 1 to 3072 bytes for a high-speed device. Otherwise the function fails.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *frame_format*: Format subtype to select, for example
+- `UX_HOST_CLASS_VIDEO_VS_FORMAT_MJPEG`
+- `UX_HOST_CLASS_VIDEO_VS_FORMAT_UNCOMPRESSED`
+- `UX_HOST_CLASS_VIDEO_VS_FORMAT_FRAME_BASED`
+- `UX_HOST_CLASS_VIDEO_VS_FORMAT_H264`
+- `UX_HOST_CLASS_VIDEO_VS_FORMAT_VP8`
+* *width*: Frame width in pixels.
+* *height*: Frame height in pixels.
+* *frame_interval*: Frame interval in 100 ns units (for example 333333 for 30 frames per second). It must be one of the discrete intervals of the frame, or fit the minimum, maximum and step of a continuous range.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The parameters were accepted by the device.
+* *UX_HOST_CLASS_VIDEO_PARAMETER_ERROR*: (0x92) The format, frame size or interval was not found, or the device refused the parameters.
+* *UX_MEMORY_INSUFFICIENT*: (0x12) Not enough memory for the control buffer.
+* *UX_DESCRIPTOR_CORRUPTED*: (0x42) The format or frame descriptors are corrupted.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+/* Select MJPEG, 640x480 at 30 frames per second. */
+status = ux_host_class_video_frame_parameters_set(video, UX_HOST_CLASS_VIDEO_VS_FORMAT_MJPEG, 640, 480, 333333);
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+== ux_host_class_video_start
+
+Start the video stream.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_start(
+    UX_HOST_CLASS_VIDEO *video)
+----
+
+=== Description
+
+This function starts the video stream with the format, frame and frame interval set by `ux_host_class_video_frame_parameters_set`. It commits the parameters to the device (VideoStreaming probe and commit controls), selects the streaming alternate setting that has enough isochronous bandwidth for the maximum payload size, and locates the isochronous endpoint. It also resets the transfer request queue.
+
+After this call, buffers can be submitted with `ux_host_class_video_transfer_buffer_add`, `ux_host_class_video_transfer_buffers_add` or `ux_host_class_video_read`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The stream was started.
+* *UX_HOST_CLASS_VIDEO_WRONG_TYPE*: (0x90) No alternate setting has enough bandwidth for the payload size.
+* *UX_MEMORY_INSUFFICIENT*: (0x12) Not enough memory for the control buffer.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` is `NULL` (when error checking is enabled).
+
+Transfer errors on the control endpoint are also returned.
+
+=== Example
+
+[,C]
+----
+status = ux_host_class_video_start(video);
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+== ux_host_class_video_stop
+
+Stop the video stream.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_stop(
+    UX_HOST_CLASS_VIDEO *video)
+----
+
+=== Description
+
+This function stops the video stream. It aborts the transfers pending on the isochronous endpoint, and selects the alternate setting 0 of the streaming interface, which has no isochronous endpoint. The transfer callback is not called for the aborted transfers. Queue the buffers again after the next `ux_host_class_video_start`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The stream was stopped.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` is `NULL` (when error checking is enabled).
+
+Errors from the interface setting selection are also returned.
+
+=== Example
+
+[,C]
+----
+status = ux_host_class_video_stop(video);
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+== ux_host_class_video_max_payload_get
+
+Get the maximum payload transfer size.
+
+=== Prototype
+
+[,C]
+----
+ULONG ux_host_class_video_max_payload_get(
+    UX_HOST_CLASS_VIDEO *video)
+----
+
+=== Description
+
+This function returns the maximum size of a payload transfer in the current stream, in bytes. It is the minimum recommended size of the buffers given to `ux_host_class_video_transfer_buffer_add`, `ux_host_class_video_transfer_buffers_add` and `ux_host_class_video_read`.
+
+The value is available after `ux_host_class_video_frame_parameters_set` and is updated by `ux_host_class_video_start`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+
+=== Return Value
+
+* The maximum payload transfer size in bytes. 0 if `video` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+ULONG payload_size;
+
+payload_size = ux_host_class_video_max_payload_get(video);
+
+/* Allocate buffers of payload_size bytes. */
+----
+
+== ux_host_class_video_transfer_callback_set
+
+Set the transfer completion callback.
+
+=== Prototype
+
+[,C]
+----
+VOID ux_host_class_video_transfer_callback_set(
+    UX_HOST_CLASS_VIDEO *video,
+    VOID (*callback_function)(UX_TRANSFER *))
+----
+
+=== Description
+
+This function sets the function called each time a buffer queued with `ux_host_class_video_transfer_buffer_add` or `ux_host_class_video_transfer_buffers_add` has been filled. The function is called from the context of the host controller driver, so it must be short and must not block. Typically it hands the buffer to an application thread.
+
+In the callback, `ux_transfer_request_data_pointer` is the buffer, `ux_transfer_request_actual_length` is the number of bytes received, and `ux_transfer_request_completion_code` is the transfer status. The buffer can be queued again after the data has been processed.
+
+The callback is not called for the transfers that are aborted by `ux_host_class_video_stop`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *callback_function*: Function to call when a transfer completes.
+
+=== Return Value
+
+None.
+
+=== Example
+
+[,C]
+----
+VOID video_transfer_done(UX_TRANSFER *transfer_request)
+{
+    /* Hand the buffer and its length to the application thread. */
+    UCHAR *buffer = transfer_request -> ux_transfer_request_data_pointer;
+    ULONG length  = transfer_request -> ux_transfer_request_actual_length;
+
+    /* ... */
+}
+
+ux_host_class_video_transfer_callback_set(video, video_transfer_done);
+----
+
+== ux_host_class_video_transfer_buffer_add
+
+Queue one buffer for reception.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_transfer_buffer_add(
+    UX_HOST_CLASS_VIDEO *video,
+    UCHAR *buffer)
+----
+
+=== Description
+
+This function queues one buffer on the isochronous endpoint to receive a payload of the maximum payload size. When the buffer is filled, the callback set by `ux_host_class_video_transfer_callback_set` is called. The buffer must be at least `ux_host_class_video_max_payload_get` bytes long.
+
+Call this function again from the callback to keep the stream going. The stream must be started before.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *buffer*: Pointer to the data buffer.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The buffer was queued.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_HOST_CLASS_VIDEO_WRONG_INTERFACE*: (0x91) The stream is not started.
+* *UX_MEMORY_ARRAY_FULL*: (0x1a) The transfer request queue is full.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` or `buffer` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+status = ux_host_class_video_transfer_buffer_add(video, buffer);
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+== ux_host_class_video_transfer_buffers_add
+
+Queue several buffers for reception.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_transfer_buffers_add(
+    UX_HOST_CLASS_VIDEO *video,
+    UCHAR **buffers,
+    ULONG num_buffers)
+----
+
+=== Description
+
+This function queues several buffers in one call. It is usually the first step after starting the stream, and it improves performance on high bandwidth isochronous endpoints, because new buffers can be added while the prepared buffers are in progress.
+
+At most `UX_HOST_CLASS_VIDEO_TRANSFER_REQUEST_COUNT - 1` buffers can be queued at any time. Each buffer must be at least `ux_host_class_video_max_payload_get` bytes long.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *buffers*: Pointer to an array of buffer pointers.
+* *num_buffers*: Number of buffers in the array.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The buffers were queued.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_HOST_CLASS_VIDEO_WRONG_INTERFACE*: (0x91) The stream is not started.
+* *UX_MEMORY_ARRAY_FULL*: (0x1a) Not enough free transfer requests.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` or `buffers` is `NULL`, or `num_buffers` is 0 (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+#define VIDEO_BUFFER_COUNT 4
+
+UCHAR *buffers[VIDEO_BUFFER_COUNT];
+
+/* buffers[] each point to a buffer of ux_host_class_video_max_payload_get() bytes. */
+status = ux_host_class_video_transfer_buffers_add(video, buffers, VIDEO_BUFFER_COUNT);
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+== ux_host_class_video_read
+
+Submit a transfer request for reception.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_read(
+    UX_HOST_CLASS_VIDEO *video,
+    UX_HOST_CLASS_VIDEO_TRANSFER_REQUEST *video_transfer_request)
+----
+
+=== Description
+
+This function submits a video transfer request to the isochronous endpoint. Unlike `ux_host_class_video_transfer_buffer_add`, the application owns the request structure and chooses the length and the completion function of each request. The call is not blocking. When the transfer completes, the completion function of the request is called.
+
+If `ux_host_class_video_transfer_request_next_video_transfer_request` is `UX_NULL`, a single request is submitted. Otherwise the whole list is submitted. The request length must not exceed the limit given by `ux_host_class_video_max_payload_get`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *video_transfer_request*: Pointer to the transfer request, or to the head of a list of requests.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The request was submitted.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_HOST_CLASS_VIDEO_WRONG_INTERFACE*: (0x91) The stream is not started.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` or `video_transfer_request` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+UX_HOST_CLASS_VIDEO_TRANSFER_REQUEST video_transfer_request;
+
+video_transfer_request.ux_host_class_video_transfer_request_data_pointer = buffer;
+video_transfer_request.ux_host_class_video_transfer_request_requested_length =
+    ux_host_class_video_max_payload_get(video);
+video_transfer_request.ux_host_class_video_transfer_request_completion_function =
+    video_request_done;
+video_transfer_request.ux_host_class_video_transfer_request_next_video_transfer_request = UX_NULL;
+
+status = ux_host_class_video_read(video, &video_transfer_request);
+
+/* If status equals UX_SUCCESS, the request was submitted. video_request_done is
+   called when it completes. */
+----
+
+== ux_host_class_video_control_get
+
+Get the range of a video control.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_control_get(
+    UX_HOST_CLASS_VIDEO *video,
+    UX_HOST_CLASS_VIDEO_CONTROL *video_control)
+----
+
+=== Description
+
+This function gets the minimum, maximum and resolution values of a control of the processing unit of the device (GET_MIN, GET_MAX and GET_RES requests). The control is selected with `ux_host_class_video_control`. The values are 16-bit signed values.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *video_control*: Pointer to the control structure. `ux_host_class_video_control` is the input. `ux_host_class_video_control_min`, `ux_host_class_video_control_max` and `ux_host_class_video_control_res` are the outputs.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The values were read.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_MEMORY_INSUFFICIENT*: (0x12) Not enough memory for the control buffer.
+* *UX_TRANSFER_ERROR*: (0x23) The device did not return the expected data.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` or `video_control` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+UX_HOST_CLASS_VIDEO_CONTROL video_control;
+
+video_control.ux_host_class_video_control = UX_HOST_CLASS_VIDEO_PU_BRIGHTNESS_CONTROL;
+status = ux_host_class_video_control_get(video, &video_control);
+
+/* If status equals UX_SUCCESS, the minimum, maximum and resolution
+   of the brightness control are in video_control. */
+----
+
+== ux_host_class_video_control_value_get
+
+Get the current value of a video control.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_control_value_get(
+    UX_HOST_CLASS_VIDEO *video,
+    UX_HOST_CLASS_VIDEO_CONTROL *video_control)
+----
+
+=== Description
+
+This function gets the current value (GET_CUR request) of a control of the processing unit of the device. The control is selected with `ux_host_class_video_control`, and the value is returned in `ux_host_class_video_control_cur`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *video_control*: Pointer to the control structure.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The value was read.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_MEMORY_INSUFFICIENT*: (0x12) Not enough memory for the control buffer.
+* *UX_TRANSFER_ERROR*: (0x23) The device did not return the expected data.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` or `video_control` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+UX_HOST_CLASS_VIDEO_CONTROL video_control;
+
+video_control.ux_host_class_video_control = UX_HOST_CLASS_VIDEO_PU_BRIGHTNESS_CONTROL;
+status = ux_host_class_video_control_value_get(video, &video_control);
+
+/* If status equals UX_SUCCESS, the current brightness is in
+   video_control.ux_host_class_video_control_cur. */
+----
+
+== ux_host_class_video_control_value_set
+
+Set the current value of a video control.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_control_value_set(
+    UX_HOST_CLASS_VIDEO *video,
+    UX_HOST_CLASS_VIDEO_CONTROL *video_control)
+----
+
+=== Description
+
+This function sets the current value (SET_CUR request) of a control of the processing unit of the device. The control is selected with `ux_host_class_video_control`, and the new value is given in `ux_host_class_video_control_cur`. The value should be in the range returned by `ux_host_class_video_control_get`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *video_control*: Pointer to the control structure.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The value was set.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_MEMORY_INSUFFICIENT*: (0x12) Not enough memory for the control buffer.
+* *UX_TRANSFER_ERROR*: (0x23) The request failed.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` or `video_control` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+UX_HOST_CLASS_VIDEO_CONTROL video_control;
+
+video_control.ux_host_class_video_control = UX_HOST_CLASS_VIDEO_PU_BRIGHTNESS_CONTROL;
+video_control.ux_host_class_video_control_cur = 64;
+status = ux_host_class_video_control_value_set(video, &video_control);
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+== ux_host_class_video_entities_parse
+
+Parse the video class descriptors of the device.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_entities_parse(
+    UX_HOST_CLASS_VIDEO *video,
+    UINT (*parse_function)(VOID *arg,
+                           UCHAR *packed_interface_descriptor,
+                           UCHAR *packed_entity_descriptor),
+    VOID *arg)
+----
+
+=== Description
+
+This function scans the configuration descriptor of the device and calls the parse function for each class-specific descriptor (`CS_INTERFACE`) of the VideoControl interface and of the VideoStreaming interface of the instance. It is used to find the IDs of terminals and units (camera terminal, selector unit, extension unit and so on), which are needed by `ux_host_class_video_control_request`.
+
+The parse function receives the application argument, a pointer to the interface descriptor, and a pointer to the class-specific descriptor. The descriptors are in packed (raw) format. To stop the parsing, the parse function returns a non-zero value. Returning `UX_DESCRIPTOR_CORRUPTED` makes the function fail with this code. Any other non-zero value stops the parsing and the function returns `UX_SUCCESS`.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *parse_function*: Function called for each video class-specific descriptor.
+* *arg*: Argument passed to the parse function.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) All descriptors were parsed, or the parse function stopped the parsing.
+* *UX_HOST_CLASS_VIDEO_DEVICE_NOT_READY*: (0x93) The device is not configured.
+* *UX_DESCRIPTOR_CORRUPTED*: (0x42) The descriptors are corrupted.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` is `NULL` (when error checking is enabled).
+
+=== Example
+
+[,C]
+----
+/* Find the ID of the first extension unit. */
+static UINT find_extension_unit(VOID *arg, UCHAR *packed_interface_descriptor, UCHAR *packed_entity_descriptor)
+{
+    /* packed_entity_descriptor[2] is bDescriptorSubtype, [3] is the entity ID. */
+    if (packed_entity_descriptor[2] == UX_HOST_CLASS_VIDEO_VC_EXTENSION_UNIT)
+    {
+        *(UCHAR *) arg = packed_entity_descriptor[3];
+
+        /* Non-zero stops the parsing. */
+        return(1);
+    }
+    return(0);
+}
+
+UCHAR extension_unit_id = 0;
+
+status = ux_host_class_video_entities_parse(video, find_extension_unit, &extension_unit_id);
+----
+
+== ux_host_class_video_control_request
+
+Send a control request to a video terminal or unit.
+
+=== Prototype
+
+[,C]
+----
+UINT ux_host_class_video_control_request(
+    UX_HOST_CLASS_VIDEO *video,
+    UINT request,
+    UCHAR interface_index,
+    UINT entity_id,
+    UINT control_selector,
+    UCHAR *parameter,
+    UINT parameter_size)
+----
+
+=== Description
+
+This function sends a class-specific control request to any entity (terminal or unit) of the device. It gives access to the controls that are not covered by `ux_host_class_video_control_get`, `ux_host_class_video_control_value_get` and `ux_host_class_video_control_value_set`, such as camera terminal controls (exposure, focus, zoom, pan/tilt) and extension unit controls. Terminal and unit IDs can be found with `ux_host_class_video_entities_parse`.
+
+The direction of the transfer is given by the request code: for the GET requests (bit 7 set, for example `UX_HOST_CLASS_VIDEO_GET_CUR`) the data is read into *parameter*, and for the SET requests (for example `UX_HOST_CLASS_VIDEO_SET_CUR`) the data in *parameter* is sent. Only one VideoStreaming interface is supported.
+
+=== Parameters
+
+* *video*: Pointer to the video class instance.
+* *request*: Request code, such as
+- `UX_HOST_CLASS_VIDEO_SET_CUR`
+- `UX_HOST_CLASS_VIDEO_GET_CUR`
+- `UX_HOST_CLASS_VIDEO_GET_MIN`
+- `UX_HOST_CLASS_VIDEO_GET_MAX`
+- `UX_HOST_CLASS_VIDEO_GET_RES`
+- `UX_HOST_CLASS_VIDEO_GET_INFO`
+- `UX_HOST_CLASS_VIDEO_GET_DEF`.
+* *interface_index*: 0 for the VideoControl interface, 1 or more for the VideoStreaming interface.
+* *entity_id*: ID of the terminal or unit. Use 0 when the request targets the interface (for example VideoStreaming controls).
+* *control_selector*: Control selector, for example `UX_HOST_CLASS_VIDEO_CT_ZOOM_ABSOLUTE_CONTROL`.
+* *parameter*: Pointer to the data to send, or to the buffer receiving the data.
+* *parameter_size*: Size of the data in bytes.
+
+=== Return Values
+
+* *UX_SUCCESS*: (0x00) The request was completed.
+* *UX_HOST_CLASS_INSTANCE_UNKNOWN*: (0x5b) Wrong class instance.
+* *UX_MEMORY_INSUFFICIENT*: (0x12) Not enough memory for the control buffer.
+* *UX_INVALID_PARAMETER*: (0xfa) `video` is `NULL` (when error checking is enabled).
+
+Transfer errors on the control endpoint are also returned.
+
+=== Example
+
+[,C]
+----
+USHORT zoom;
+
+/* Read the current zoom of the camera terminal (entity ID 2 on the VideoControl interface). */
+status = ux_host_class_video_control_request(video,
+                                             UX_HOST_CLASS_VIDEO_GET_CUR,
+                                             0,
+                                             2,
+                                             UX_HOST_CLASS_VIDEO_CT_ZOOM_ABSOLUTE_CONTROL,
+                                             (UCHAR *) &zoom,
+                                             sizeof(zoom));
+
+/* If status equals UX_SUCCESS, the operation was successful. */
+----
+
+=== Complete streaming example
+
+[,C]
+----
+#define VIDEO_BUFFER_COUNT 4
+
+static UCHAR *video_buffers[VIDEO_BUFFER_COUNT];
+
+static VOID video_transfer_done(UX_TRANSFER *transfer_request)
+{
+    /* Called when a buffer has been filled. Process transfer_request ->
+       ux_transfer_request_actual_length bytes of data pointed to by
+       transfer_request -> ux_transfer_request_data_pointer, then queue the
+       buffer again. */
+    ux_host_class_video_transfer_buffer_add(video,
+        transfer_request -> ux_transfer_request_data_pointer);
+}
+
+UINT start_streaming(UX_HOST_CLASS_VIDEO *video)
+{
+UINT status;
+
+    /* Choose the format, frame size and frame rate. */
+    status = ux_host_class_video_frame_parameters_set(video,
+                 UX_HOST_CLASS_VIDEO_VS_FORMAT_MJPEG, 640, 480, 333333);
+    if (status != UX_SUCCESS)
+        return(status);
+
+    /* Be notified of each received payload. */
+    ux_host_class_video_transfer_callback_set(video, video_transfer_done);
+
+    /* Select the alternate setting and enable the isochronous endpoint. */
+    status = ux_host_class_video_start(video);
+    if (status != UX_SUCCESS)
+        return(status);
+
+    /* video_buffers[] must each be ux_host_class_video_max_payload_get(video) bytes. */
+    return(ux_host_class_video_transfer_buffers_add(video, video_buffers, VIDEO_BUFFER_COUNT));
+}
 ----
